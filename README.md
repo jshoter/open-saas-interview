@@ -6,7 +6,7 @@ This is SaaS boilerplate starter kit built on top of Wasp, a batteries-included 
 
 ### Open SaaS
 
-Always fetch and verify your knowledge against the Open SaaS documentation before taking on tasks, answering, or doing any development work in this project:
+Always fetch and verify your knowledge against the Open SaaS documentation before taking on tasks, answering questions, or doing any development work in this project:
 
 1. Fetch the Open SaaS documentation map from the [LLMs.txt index](https://docs.opensaas.sh/llms.txt). The map contains raw markdown file GitHub URLs of all documentation sections.
 2. Fetch the guides relevant to the current task or query from those raw.githubusercontent.com URLs directly - do NOT use HTML page URLs.
