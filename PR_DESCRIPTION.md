@@ -7,6 +7,64 @@
 
 ---
 
+## Changes from Base (基于 main 的改进)
+
+### 1. 代码整合与优化
+| 原实现 | 改进后 |
+|--------|--------|
+| `animationWorker.ts` 独立文件 | 整合到 `operations.ts`，统一维护 |
+| 动态导入 `puppeteer` 等依赖 | 静态导入，更清晰 |
+| 硬编码 `/tmp/animations/` 路径 | 跨平台路径支持（Windows/Linux/macOS）|
+
+### 2. 帧渲染精度优化（核心改进）
+**原实现问题：**
+```typescript
+// 使用 setTimeout 等待，精度受事件循环影响
+for (let i = 0; i < totalFrames; i++) {
+  await page.waitForTimeout(1000 / fps);  // ±16ms 偏差
+  await page.screenshot({ path: `frame_${i}.png` });
+}
+```
+- CSS 动画使用 `requestAnimationFrame`，刷新率由浏览器决定（通常 60Hz）
+- `setTimeout` 精度受事件循环影响，累积误差导致视频速度不准
+
+**改进方案：**
+```typescript
+// 使用 page.evaluate() 在浏览器内同步控制 rAF
+await page.evaluate(({ totalFrames, frameInterval }) => {
+  const captureLoop = (timestamp: number) => {
+    const frameIndex = Math.floor((timestamp - startTime) / frameInterval);
+    window.postMessage({ type: "CAPTURE_FRAME", frameIndex }, origin);
+    if (frameIndex < totalFrames) {
+      requestAnimationFrame(captureLoop);
+    }
+  };
+  requestAnimationFrame(captureLoop);
+}, { totalFrames, frameInterval });
+
+// Node.js 监听消息并截图
+for (let i = 0; i < totalFrames; i++) {
+  await waitForMessage("CAPTURE_FRAME", { frameIndex: i });
+  await page.screenshot({ path: `frame_${i}.png` });
+}
+```
+- `performance.now()` 提供微秒级精度
+- `requestAnimationFrame` 与浏览器刷新率同步
+- `postMessage` 跨上下文通信，确保帧准确
+
+### 3. 跨平台临时目录支持
+```typescript
+const baseTmpDir = process.env.ANIMATION_TMP_DIR ||
+  (process.platform === "win32"
+    ? `${process.env.TEMP || "C:\\Temp"}\\animations`
+    : "/tmp/animations");
+```
+- Windows: `%TEMP%\animations\{id}`
+- Linux/macOS: `/tmp/animations\{id}`
+- 可通过环境变量自定义
+
+---
+
 ## Design Trade-offs (设计取舍)
 
 ### 1. Puppeteer vs Canvas API
@@ -33,13 +91,13 @@
 
 **选择原因**: 需要精确控制帧率，确保视频速度与动画时长一致。
 
-### 4. Local Storage vs S3
+### 4. 静态导入 vs 动态导入
 | 方案 | 优点 | 缺点 |
 |------|------|------|
-| **Local (Dev)** ✅ | 开发环境简单，无需配置 | 不可扩展，多实例无法共享 |
-| S3 (Production) | 可扩展，CDN 加速 | 需要额外配置 |
+| **静态导入** ✅ | 代码更清晰，类型检查更严格 | 服务器启动时加载 |
+| 动态导入 | 避免启动时的加载问题 | 代码分散，难以维护 |
 
-**选择原因**: 面试任务是 MVP，先跑通核心链路，S3 集成留作后续规划。
+**选择原因**: 整合到单一文件后，静态导入更清晰；Puppeteer 是重型依赖，但项目已安装。
 
 ---
 
@@ -63,42 +121,15 @@ Puppeteer 渲染帧 → FFmpeg 编码 MP4
 ### 关键技术实现
 
 #### 1. 精确帧渲染 (Precise Frame Capture)
-```typescript
-// 在浏览器内启动动画并同步控制
-await page.evaluate(({ totalFrames, frameInterval }) => {
-  const captureLoop = (timestamp: number) => {
-    const frameIndex = Math.floor((timestamp - startTime) / frameInterval);
-    window.postMessage({ type: "CAPTURE_FRAME", frameIndex }, origin);
-    if (frameIndex < totalFrames) {
-      requestAnimationFrame(captureLoop);
-    }
-  };
-  requestAnimationFrame(captureLoop);
-}, { totalFrames, frameInterval });
-
-// Node.js 监听消息并截图
-for (let i = 0; i < totalFrames; i++) {
-  await waitForMessage("CAPTURE_FRAME", { frameIndex: i });
-  await page.screenshot({ path: `frame_${i}.png` });
-}
-```
-
-**为什么用 `requestAnimationFrame` + `postMessage`？**
-- CSS 动画使用 `requestAnimationFrame`，刷新率由浏览器决定（通常 60Hz）
-- `setTimeout` 精度受事件循环影响，可能有 ±16ms 偏差
-- 累积误差会导致视频速度不准确
-- `performance.now()` 提供微秒级精度，确保帧同步
+- 在浏览器内使用 `requestAnimationFrame` 控制动画时序
+- 通过 `postMessage` 将帧索引传回 Node.js
+- Node.js 监听消息并触发截图
+- 确保帧间隔与浏览器刷新率同步
 
 #### 2. 跨平台临时目录
-```typescript
-const baseTmpDir = process.env.ANIMATION_TMP_DIR ||
-  (process.platform === "win32"
-    ? `${process.env.TEMP || "C:\\Temp"}\\animations`
-    : "/tmp/animations");
-```
 - Windows: `%TEMP%\animations\{id}`
 - Linux/macOS: `/tmp/animations/{id}`
-- 可通过环境变量自定义
+- 可通过环境变量 `ANIMATION_TMP_DIR` 自定义
 
 #### 3. 状态机设计
 ```
@@ -183,11 +214,12 @@ describe('renderAnimationJob', () => {
 
 ## Files Changed
 - `src/demo-ai-app/operations.ts` - 整合 renderAnimationJob，添加精确帧渲染和跨平台路径支持
-- `src/demo-ai-app/animationWorker.ts` - 删除（合并到 operations.ts，避免重复定义）
-- `src/demo-ai-app/AnimationToVideoSection.tsx` - 新增前端组件
+- `src/demo-ai-app/animationWorker.ts` - 删除（代码已整合到 operations.ts）
+- `src/demo-ai-app/AnimationToVideoSection.tsx` - 优化前端组件（智能轮询、状态管理）
 - `src/demo-ai-app/DemoAppPage.tsx` - 集成新组件
 - `src/demo-ai-app/demo-ai-app.wasp.ts` - 注册新 job
 - `schema.prisma` - 添加 Animation 模型
+- `PR_DESCRIPTION.md` - 新增 PR 说明文档
 
 ---
 
