@@ -43,11 +43,81 @@
 
 ---
 
+## Implementation Details (实现细节)
+
+### 核心架构
+```
+用户输入 prompt
+    ↓
+createAnimation() → 创建 Animation 记录 (status: pending)
+    ↓
+generateAnimationHtml() → GPT-4o 生成 HTML 代码
+    ↓
+renderAnimationJob() → PgBoss 后台任务
+    ↓
+Puppeteer 渲染帧 → FFmpeg 编码 MP4
+    ↓
+更新状态为 completed，保存 videoUrl
+```
+
+### 关键技术实现
+
+#### 1. 精确帧渲染 (Precise Frame Capture)
+```typescript
+// 在浏览器内启动动画并同步控制
+await page.evaluate(({ totalFrames, frameInterval }) => {
+  const captureLoop = (timestamp: number) => {
+    const frameIndex = Math.floor((timestamp - startTime) / frameInterval);
+    window.postMessage({ type: "CAPTURE_FRAME", frameIndex }, origin);
+    if (frameIndex < totalFrames) {
+      requestAnimationFrame(captureLoop);
+    }
+  };
+  requestAnimationFrame(captureLoop);
+}, { totalFrames, frameInterval });
+
+// Node.js 监听消息并截图
+for (let i = 0; i < totalFrames; i++) {
+  await waitForMessage("CAPTURE_FRAME", { frameIndex: i });
+  await page.screenshot({ path: `frame_${i}.png` });
+}
+```
+
+**为什么用 `requestAnimationFrame` + `postMessage`？**
+- CSS 动画使用 `requestAnimationFrame`，刷新率由浏览器决定（通常 60Hz）
+- `setTimeout` 精度受事件循环影响，可能有 ±16ms 偏差
+- 累积误差会导致视频速度不准确
+- `performance.now()` 提供微秒级精度，确保帧同步
+
+#### 2. 跨平台临时目录
+```typescript
+const baseTmpDir = process.env.ANIMATION_TMP_DIR ||
+  (process.platform === "win32"
+    ? `${process.env.TEMP || "C:\\Temp"}\\animations`
+    : "/tmp/animations");
+```
+- Windows: `%TEMP%\animations\{id}`
+- Linux/macOS: `/tmp/animations/{id}`
+- 可通过环境变量自定义
+
+#### 3. 状态机设计
+```
+pending → rendering → completed
+                ↘ failed
+```
+- `pending`: 创建后等待 HTML 生成
+- `rendering`: 正在渲染视频
+- `completed`: 视频生成成功
+- `failed`: 渲染失败，可重试
+
+**防并发**: 同一动画同时只能有一个渲染任务，通过状态机保证。
+
+---
+
 ## Testing Strategy (测试方式)
 
 ### 单元测试
 ```typescript
-// 测试 HTML 生成逻辑
 describe('generateHtmlAnimation', () => {
   it('should extract HTML from markdown code block', async () => {
     const result = await generateHtmlAnimation('旋转的球体');
@@ -59,10 +129,8 @@ describe('generateHtmlAnimation', () => {
 
 ### 集成测试 (Mock Puppeteer)
 ```typescript
-// 测试渲染流程
 describe('renderAnimationJob', () => {
   it('should update status to completed after rendering', async () => {
-    // Mock puppeteer and ffprobe
     const result = await renderAnimationJob({ animationId }, context);
     expect(result.success).toBe(true);
     expect(animation.status).toBe('completed');
@@ -114,42 +182,12 @@ describe('renderAnimationJob', () => {
 ---
 
 ## Files Changed
-- `src/demo-ai-app/operations.ts` - Added renderAnimationJob with precise frame capture
-- `src/demo-ai-app/animationWorker.ts` - **Removed** (duplicate definition fix)
-- `src/demo-ai-app/AnimationToVideoSection.tsx` - New frontend component
-- `src/demo-ai-app/DemoAppPage.tsx` - Integrated new section
-- `src/demo-ai-app/demo-ai-app.wasp.ts` - Registered new job
-- `schema.prisma` - Added Animation model
-
----
-
-## Key Code Highlights
-
-### Precise Frame Rendering (核心修复)
-```typescript
-// 使用 page.evaluate() 在浏览器内同步控制 rAF
-await page.evaluate(({ totalFrames, frameInterval }) => {
-  const captureLoop = (timestamp: number) => {
-    const frameIndex = Math.floor((timestamp - startTime) / frameInterval);
-    window.postMessage({ type: "CAPTURE_FRAME", frameIndex }, origin);
-    if (frameIndex < totalFrames) {
-      requestAnimationFrame(captureLoop);
-    }
-  };
-  requestAnimationFrame(captureLoop);
-}, { totalFrames, frameInterval });
-
-// Node.js 监听消息并截图
-for (let i = 0; i < totalFrames; i++) {
-  await waitForMessage("CAPTURE_FRAME", { frameIndex: i });
-  await page.screenshot({ path: `frame_${i}.png` });
-}
-```
-
-**为什么不用 setTimeout？**
-- CSS 动画使用 `requestAnimationFrame`，刷新率由浏览器决定（通常 60Hz）
-- `setTimeout` 精度受事件循环影响，可能有 ±16ms 偏差
-- 累积误差会导致视频速度不准确
+- `src/demo-ai-app/operations.ts` - 整合 renderAnimationJob，添加精确帧渲染和跨平台路径支持
+- `src/demo-ai-app/animationWorker.ts` - 删除（合并到 operations.ts，避免重复定义）
+- `src/demo-ai-app/AnimationToVideoSection.tsx` - 新增前端组件
+- `src/demo-ai-app/DemoAppPage.tsx` - 集成新组件
+- `src/demo-ai-app/demo-ai-app.wasp.ts` - 注册新 job
+- `schema.prisma` - 添加 Animation 模型
 
 ---
 
@@ -158,4 +196,5 @@ for (let i = 0; i < totalFrames; i++) {
 ✅ 核心链路已跑通（创建 → 生成 → 渲染 → 下载）  
 ✅ 状态机防止并发问题  
 ✅ 错误处理与重试机制  
-✅ 跨平台支持 (Windows/Linux/macOS)
+✅ 跨平台支持 (Windows/Linux/macOS)  
+✅ 精确帧同步（requestAnimationFrame + postMessage）
