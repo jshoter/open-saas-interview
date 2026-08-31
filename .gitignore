@@ -1,0 +1,16 @@
+# Dependencies
+node_modules/
+
+# macOS-specific files
+.DS_Store
+
+# Wasp build artifacts
+.wasp/
+
+# Template migrations
+template/app/migrations
+template/app/package-lock.json
+
+# AI tool configs (local only - should not be tracked)
+.agents/
+.claude/

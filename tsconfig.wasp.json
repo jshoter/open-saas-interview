@@ -1,0 +1,32 @@
+{
+  "compilerOptions": {
+    "skipLibCheck": true,
+    "target": "ES2025",
+    "isolatedModules": true,
+    "moduleDetection": "force",
+    "strict": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "module": "esnext",
+    "moduleResolution": "bundler",
+    "jsx": "preserve",
+    "allowJs": true,
+    "noEmit": false,
+    "lib": [
+      "ES2025"
+    ],
+    "types": [
+      "node"
+    ],
+    "declaration": true,
+    "emitDeclarationOnly": true
+  },
+  "include": [
+    "**/*.wasp.ts",
+    ".wasp/out/types/spec"
+  ],
+  "exclude": [
+    "node_modules",
+    ".wasp/out"
+  ]
+}
