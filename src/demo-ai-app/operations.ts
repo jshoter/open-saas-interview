@@ -372,7 +372,13 @@ export const renderAnimationJob: RenderAnimationJob<
     data: { status: "rendering" },
   });
 
-  const tmpDir = `/tmp/animations/${animationId}`;
+  // 跨平台临时目录处理：Windows 使用 %TEMP% 或 C:\Temp，Unix 使用 /tmp
+  const baseTmpDir =
+    process.env.ANIMATION_TMP_DIR ||
+    (process.platform === "win32"
+      ? `${process.env.TEMP || "C:\\Temp"}\\animations`
+      : "/tmp/animations");
+  const tmpDir = `${baseTmpDir}/${animationId}`;
   const outputPath = `${tmpDir}/output.mp4`;
 
   try {
@@ -404,24 +410,101 @@ export const renderAnimationJob: RenderAnimationJob<
     });
     await page.waitForTimeout(1000);
 
-    // Render frames
+    // Render frames with precise timing using requestAnimationFrame
+    // 为什么不用 setTimeout/waitForTimeout？
+    // - CSS 动画使用 requestAnimationFrame，刷新率由浏览器决定（通常 60Hz）
+    // - setTimeout 精度受事件循环影响，可能有几毫秒到几十毫秒的偏差
+    // - 累积误差会导致视频速度不准确
+    //
+    // 解决方案：使用 page.evaluate() 在浏览器内同步控制 rAF，通过 postMessage 传回帧索引
     const duration = animation.duration || 3;
     const fps = animation.fps || 30;
     const totalFrames = duration * fps;
+    const frameInterval = 1000 / fps; // 每帧间隔（毫秒）
+
+    console.log(
+      `[AnimationJob] Rendering ${totalFrames} frames at ${fps}fps, ${duration}s duration`,
+    );
 
     mkdirSync(tmpDir, { recursive: true });
 
+    // 在页面中启动动画并设置帧捕获控制器
+    await page.evaluate(
+      ({ totalFrames, frameInterval }) => {
+        const state = {
+          startTime: performance.now(),
+          rafId: null as number | null,
+          capturedFrames: 0,
+        };
+
+        // 定义帧捕获回调，通过 postMessage 传回 Node.js
+        (window as any).__captureFrame = (frameIndex: number) => {
+          window.postMessage(
+            { type: "CAPTURE_FRAME", frameIndex },
+            window.location.origin,
+          );
+        };
+
+        // 使用 requestAnimationFrame 精确控制拍摄时机
+        const captureLoop = (timestamp: number) => {
+          const elapsed = timestamp - state.startTime;
+          const frameIndex = Math.floor(elapsed / frameInterval);
+
+          if (frameIndex < totalFrames) {
+            state.capturedFrames = frameIndex + 1;
+            (window as any).__captureFrame(frameIndex);
+            state.rafId = requestAnimationFrame(captureLoop);
+          }
+        };
+
+        state.rafId = requestAnimationFrame(captureLoop);
+
+        // 暴露清理函数供后续使用
+        (window as any).__cancelAnimation = () => {
+          if (state.rafId) cancelAnimationFrame(state.rafId);
+        };
+      },
+      { totalFrames, frameInterval },
+    );
+
+    // 监听页面消息，当收到 CAPTURE_FRAME 时截图
+    const framePromises: Promise<void>[] = [];
+
     for (let i = 0; i < totalFrames; i++) {
-      const progress = (i / totalFrames) * 100;
-      console.log(
-        `[AnimationJob] Frame ${i + 1}/${totalFrames} (${progress.toFixed(1)}%)`,
-      );
-      await page.waitForTimeout(1000 / fps);
-      await page.screenshot({
-        path: `${tmpDir}/frame_${String(i).padStart(4, "0")}.png`,
-        type: "png",
+      const promise = new Promise<void>((resolve) => {
+        const handler = (event: MessageEvent) => {
+          if (
+            event.data?.type === "CAPTURE_FRAME" &&
+            event.data.frameIndex === i
+          ) {
+            page.removeListener("message", handler);
+            resolve();
+          }
+        };
+        page.on("message", handler);
       });
+      framePromises.push(promise);
     }
+
+    // 并行执行截图和动画运行
+    const screenshotTask = async () => {
+      for (let i = 0; i < totalFrames; i++) {
+        // 等待对应帧的捕获信号
+        await framePromises[i];
+
+        const progress = ((i + 1) / totalFrames) * 100;
+        console.log(
+          `[AnimationJob] Frame ${i + 1}/${totalFrames} (${progress.toFixed(1)}%)`,
+        );
+
+        await page.screenshot({
+          path: `${tmpDir}/frame_${String(i).padStart(4, "0")}.png`,
+          type: "png",
+        });
+      }
+    };
+
+    await Promise.all([screenshotTask()]);
 
     await browser.close();
 
