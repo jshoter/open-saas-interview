@@ -1,55 +1,16 @@
-# Floatboat 面试任务
+# Open SaaS
 
-## ✅ 项目已完成
+This is SaaS boilerplate starter kit built on top of Wasp, a batteries-included framework for building full-stack web apps with React, Node.js, and Prisma.
 
-**Git提交（单个）：**
-```
-feat: add HTML animation to video generation
-```
+## Documentation
 
----
+### Open SaaS
 
-## 📝 创建Pull Request
+Always fetch and verify your knowledge against the Open SaaS documentation before taking on tasks, answering, or doing any development work in this project:
 
-### 强制推送（更新GitHub）
+1. Fetch the Open SaaS documentation map from the [LLMs.txt index](https://docs.opensaas.sh/llms.txt). The map contains raw markdown file GitHub URLs of all documentation sections.
+2. Fetch the guides relevant to the current task or query from those raw.githubusercontent.com URLs directly - do NOT use HTML page URLs.
 
-```bash
-cd "C:\Users\v1\Desktop\interview-project"
-git push -u origin main --force
-```
+### Wasp
 
-### 创建PR
-
-访问：https://github.com/floatboatai/open-saas-interview/pulls
-
-**Title:**
-```
-feat: add HTML animation to video generation
-```
-
-**Description:**
-```markdown
-## What
-新增功能：用户输入描述 → AI生成HTML动画 → 自动渲染为MP4视频
-
-## Technical Details
-- 前端：React + Wasp operations
-- 后端：Wasp actions + PgBoss后台Job
-- 渲染：Puppeteer (headless Chrome) + FFmpeg
-- 存储：PostgreSQL (Prisma ORM)
-
-## Key Components
-1. schema.prisma - Animation数据模型
-2. operations.ts - Wasp操作（createAnimation, renderAnimationJob）
-3. animationWorker.ts - Puppeteer + FFmpeg渲染
-4. AnimationToVideoSection.tsx - 前端UI
-
-## Design Decisions
-- Puppeteer vs Canvas：复用CSS动画，零改造
-- PgBoss：复用现有PostgreSQL，无需额外依赖
-- 状态机：pending → rendering → completed/failed
-```
-
----
-
-祝你面试顺利！🎉
+Remember, this template is built on the Wasp framework. If, at any time, the Open SaaS docs fail to provide enough information about a certain feature, make sure to check out the Wasp docs [LLMs.txt index](https://wasp.sh/llms.txt).
